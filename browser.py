@@ -6,8 +6,18 @@ from rich.live import Live
 from rich.panel import Panel
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
+from rich.traceback import install
+import readchar
 
 console = Console()
+install()
+
+selected_link = 1
+scroll_offset = 1
+linked_line_map = {}
+link_map = {}
+global_line_index = 0
+PAGE_SIZE = console.size.height - 5
 
 def browse_or_fail(page, url: str, timeout: int = 10000):
     try:
@@ -66,7 +76,7 @@ def tag_prefix(tag):
 def print_dom(node, indent=0):
 
     lines = []
-    global link_counter
+    global link_counter, selected_link, scroll_offset, global_line_index
     if node is None:
         return
 
@@ -76,11 +86,19 @@ def print_dom(node, indent=0):
     if node['tag'] == 'a':
         href = node.get('href', '')
         text = node.get('text', href) or href or '(no-text)'
-        link_text = Text(f"{link_counter}) Link: {text} -> {href}", style="bold blue underline")
+        style= "bold blue underline"
+        link_text = Text(f"{link_counter}) Link: {text} -> {href}", style=style)
         # console.print(spacer, link_text)
-        lines.append(spacer + link_text.plain)
+        spacer_obj = Text(spacer)
+        lines.append(spacer_obj + link_text)
+
+        linked_line_map[link_counter] = global_line_index
+        global_line_index += 1
+        # print("global_line_index", global_line_index)
         link_map[link_counter] = href
         link_counter += 1
+        # print("link_counter", link_counter)
+
     else:
         if node.get("text"):
             if node['tag'].startswith('h1'):
@@ -107,7 +125,7 @@ def print_dom(node, indent=0):
 def show_welcome_banner():
     with open("index.html", "r", encoding="utf-8") as f:
         html = f.read()
-
+    # index.html is empty
     soup = BeautifulSoup(html, "html.parser")
     welcome_text = soup.pre.string if soup.pre else "Welcome to Web Explorer"
     sub_text = soup.p.string if soup.p else "Text-based browser environment"
@@ -117,7 +135,7 @@ def show_welcome_banner():
 
     banner = Panel.fit(
         Text.assemble(welcome_rich, "\n", sub_rich),
-        border_style="blue_violet",
+        border_style="grey93",
         padding=(1, 4),
     )
     console.clear()
@@ -141,10 +159,7 @@ show_welcome_banner()
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
     page = browser.new_page()
-    result = browse_or_fail(page, "http://127.0.0.1:5500/index.html", timeout=10000)
-
-    link_counter = 1
-    link_map = {}
+    result = browse_or_fail(page, "https://github.com/topics/ecommerce-website", timeout=10000)
 
     dom_tree = page.evaluate("""
         () => {                             
@@ -176,17 +191,111 @@ with sync_playwright() as p:
     """)
 
     console.clear()
-    lines = print_dom(dom_tree)
-    top_panel = Group(*lines)
-
-    bottom_panel_text = "← ↑ ↓ →  |  Search: "
-    bottom_panel = Panel(bottom_panel_text, style="bold blue")
-
-    combined = Group(top_panel, bottom_panel)
-
-    with Live(combined, console=console, refresh_per_second=10) as live:
+    
+    with Live(console=console, refresh_per_second=20) as live:
         while True:
+            link_counter = 1
+            global_line_index = 0
+            linked_line_map.clear()
+            link_map.clear()
+            lines = print_dom(dom_tree)
+
+            selected_line_index = linked_line_map.get(selected_link, 0)
+         
+            if 0 <= selected_line_index < global_line_index:
+                lines[selected_line_index].stylize("reverse medium_violet_red")
+
+            if selected_line_index < scroll_offset:
+                scroll_offset = selected_line_index
+            elif selected_line_index >= scroll_offset + PAGE_SIZE:
+                scroll_offset = selected_line_index - PAGE_SIZE + 1
+
+            viewport_lines = lines[scroll_offset : scroll_offset + PAGE_SIZE]
+            top_panel = Group(*viewport_lines)
+
+            bottom_panel_text = "← ↑ ↓ →  |  Enter to follow | Q to quit | Search:  "
+            bottom_panel = Panel(bottom_panel_text, style="bold white")
+
+            combined = Group(top_panel, bottom_panel)
             live.update(combined)
+
+            max_link = max(link_map.keys()) if link_map else 1
+            selected_link = min(max_link, max(1, selected_link))
+
+            link_clickable = {
+                line_idx: link_num for link_num,
+                line_idx in linked_line_map.items()
+            }
+
+            # print(f"repr: {repr(key)}")
+            # if key == readchar.key.UP:
+            #     print("You pressed UP")
+            # elif key == readchar.key.DOWN:
+            #     print("You pressed DOWN")
+            # elif key == readchar.key.LEFT:
+            #     print("You pressed LEFT")
+            # elif key == readchar.key.RIGHT:
+            #     print("You pressed RIGHT")
+            # elif key == readchar.key.ENTER:
+            #     break
+
+            key = readchar.readkey()
+            if key == '\x00':
+                key2 = readchar.readkey()
+                key = '\x00' + key2
+            if key in ('\x00H', '\xe0H'):  # Up
+                selected_link = max(1, selected_link - 1)
+            elif key in ('\x00P', '\xe0P'):  # Down
+                selected_link = min(max_link, selected_link + 1)
+            elif key in ('\x00M', '\xe0M'):  # Right
+                console.print("[yellow] Inactionable [/yellow]")
+            elif key in ('\x00K', '\xe0K'):  # Left
+                console.print("[yellow] Inactionable [/yellow]")
+            elif key == '\r':
+                url = link_map.get(selected_link)
+                print(url)
+                link_num = link_clickable.get(selected_line_index)
+                print(link_num)
+                if link_num:
+                    url = link_map[link_num]
+                    if url and url_validate(url):
+                        try: 
+                            browse_or_fail(page, url)
+                            page.goto(url, wait_until='load')
+                            dom_tree = page.evaluate("""
+                            () => {
+                                const walk = (el) => {
+                                    const tagName = el.tagName.toLowerCase() ? el.tagName.toLowerCase(): 'unknown';
+                                    if (tagName === 'script' || tagName === 'style') return null;
+                                    const hasChildren = el.children && el.children.length > 0;
+                                    let text = null;
+                                    try {
+                                        const raw = el.textContent ? el.textContent.trim() : "";
+                                        if (!hasChildren && raw.length > 0) text = raw;
+                                    } catch (e) {
+                                        text = null;
+                                    }
+                                    const obj = {
+                                        tag: tagName,
+                                        text: text,
+                                        href: tagName === 'a' ? (el.href || '') : undefined,
+                                        children: []
+                                    };
+                                    for (let i = 0; i < el.children.length; i++) {
+                                        const child = walk(el.children[i]);
+                                        if (child) obj.children.push(child);
+                                    }
+                                    return obj;
+                                };
+                                return walk(document.body);
+                            }
+                        """)
+                            selected_link = 1
+                        except Exception as e:
+                            console.print(f"[red]Navigation failed:[/red] {e}", style="bold red")
+            elif key.lower() == 'q':
+                print(key)
+                break
 
         # choice = input("\nEnter link number to follow (or q to quit): ")
         # if choice.lower() == "q":
