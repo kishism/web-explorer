@@ -17,7 +17,7 @@ scroll_offset = 1
 linked_line_map = {}
 link_map = {}
 global_line_index = 0
-PAGE_SIZE = console.size.height - 5
+PAGE_SIZE = console.size.height - 4
 
 def browse_or_fail(page, url: str, timeout: int = 10000):
     try:
@@ -154,12 +154,61 @@ def url_validate(u: str) -> bool:
         return True
     return False
 
+def search_mode(page, live):
+    live.stop()
+    console.print("Search mode [Enter URL to visit]: ", style="bold cyan", end="")
+    url_input = input().strip()
+
+    if not url_validate(url_input):
+        console.print(f"[yellow]Invalid URL: {url_input}[/yellow]")
+        input("Press Enter to continue...")
+        live.start()
+        return None
+    try:
+        browse_or_fail(page, url_input)
+        page.goto(url_input, wait_until='load')
+        dom_tree = page.evaluate("""
+        () => {
+            const walk = (el) => {
+                const tagName = el.tagName.toLowerCase() ? el.tagName.toLowerCase(): 'unknown';
+                if (tagName === 'script' || tagName === 'style') return null;
+                const hasChildren = el.children && el.children.length > 0;
+                let text = null;
+                try {
+                    const raw = el.textContent ? el.textContent.trim() : "";
+                    if (!hasChildren && raw.length > 0) text = raw;
+                } catch (e) {
+                    text = null;
+                }
+                const obj = {
+                    tag: tagName,
+                    text: text,
+                    href: tagName === 'a' ? (el.href || '') : undefined,
+                    children: []
+                };
+                for (let i = 0; i < el.children.length; i++) {
+                    const child = walk(el.children[i]);
+                    if (child) obj.children.push(child);
+                }
+                return obj;
+            };
+            return walk(document.body);
+        }
+        """)
+        return dom_tree
+    except Exception as e:
+        console.print(f"[red]Navigation failed:[/red] {e}", style="bold red")
+        return None
+
+    finally:
+        live.start()
+
 show_welcome_banner()  
 
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
     page = browser.new_page()
-    result = browse_or_fail(page, "https://github.com/topics/ecommerce-website", timeout=10000)
+    result = browse_or_fail(page, "http://127.0.0.1:5500/index.html", timeout=10000)
 
     dom_tree = page.evaluate("""
         () => {                             
@@ -213,7 +262,7 @@ with sync_playwright() as p:
             viewport_lines = lines[scroll_offset : scroll_offset + PAGE_SIZE]
             top_panel = Group(*viewport_lines)
 
-            bottom_panel_text = "← ↑ ↓ →  |  Enter to follow | Q to quit | Search:  "
+            bottom_panel_text = "← ↑ ↓ →  |  Enter to follow | Q to quit | S (or) / to Search "
             bottom_panel = Panel(bottom_panel_text, style="bold white")
 
             combined = Group(top_panel, bottom_panel)
@@ -251,6 +300,15 @@ with sync_playwright() as p:
                 console.print("[yellow] Inactionable [/yellow]")
             elif key in ('\x00K', '\xe0K'):  # Left
                 console.print("[yellow] Inactionable [/yellow]")
+            elif key.lower() in ('s', '/'):
+                new_dom = search_mode(page, live)
+                if new_dom:
+                    dom_tree = new_dom
+                    selected_link = 1
+                    scroll_offset = 0
+                    linked_line_map.clear()
+                    link_map.clear()
+                    console.clear()
             elif key == '\r':
                 url = link_map.get(selected_link)
                 print(url)
