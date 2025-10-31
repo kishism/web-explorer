@@ -19,6 +19,13 @@ link_map = {}
 global_line_index = 0
 PAGE_SIZE = console.size.height - 4
 
+def get_page_title(page) -> str:
+    try:
+        title = page.title()
+        return title if title else "(No title)"
+    except Exception:
+        return "(Unknown Page Title)"
+
 def browse_or_fail(page, url: str, timeout: int = 10000):
     try:
         response = page.goto(url, wait_until='load', timeout=timeout)
@@ -250,6 +257,9 @@ with sync_playwright() as p:
             lines = print_dom(dom_tree)
 
             selected_line_index = linked_line_map.get(selected_link, 0)
+
+            page_title = get_page_title(page)
+            title_line = Text(f"{page_title}", style="bold cyan", justify="center")
          
             if 0 <= selected_line_index < global_line_index:
                 lines[selected_line_index].stylize("reverse medium_violet_red")
@@ -260,7 +270,7 @@ with sync_playwright() as p:
                 scroll_offset = selected_line_index - PAGE_SIZE + 1
 
             viewport_lines = lines[scroll_offset : scroll_offset + PAGE_SIZE]
-            top_panel = Group(*viewport_lines)
+            top_panel = Group(title_line, *viewport_lines)
 
             bottom_panel_text = "← ↑ ↓ →  |  Enter to follow | Q to quit | S (or) / to Search "
             bottom_panel = Panel(bottom_panel_text, style="bold white")
