@@ -19,6 +19,10 @@ link_map = {}
 global_line_index = 0
 PAGE_SIZE = console.size.height - 4
 
+history_back = []
+history_forward = []
+current_url = 'http://127.0.0.1:5500/index.html'
+
 def get_page_title(page) -> str:
     try:
         title = page.title()
@@ -161,6 +165,50 @@ def url_validate(u: str) -> bool:
         return True
     return False
 
+def history_links(url, page, is_history=False):
+    global dom_tree, current_url, history_back, history_forward
+    if url == current_url:
+        return
+    
+    if not is_history and current_url:
+        history_back.append(current_url)
+        history_forward.clear()
+
+    try:
+        browse_or_fail(page, url)
+        page.goto(url, wait_until='load')
+        dom_tree = page.evaluate("""
+        () => {
+            const walk = (el) => {
+                const tagName = el.tagName.toLowerCase() ? el.tagName.toLowerCase(): 'unknown';
+                if (tagName === 'script' || tagName === 'style') return null;
+                const hasChildren = el.children && el.children.length > 0;
+                let text = null;
+                try {
+                    const raw = el.textContent ? el.textContent.trim() : "";
+                    if (!hasChildren && raw.length > 0) text = raw;
+                } catch (e) { text = null }
+                const obj = {
+                    tag: tagName,
+                    text: text,
+                    href: tagName === 'a' ? (el.href || '') : undefined,
+                    children: []
+                };
+                for (let i = 0; i < el.children.length; i++) {
+                    const child = walk(el.children[i]);
+                    if (child) obj.children.push(child);
+                }
+                return obj;
+            };
+            return walk(document.body);
+        }
+        """)
+        current_url = url
+        return True
+    except Exception as e:
+        console.print(f"[red]Navigation failed:[/red] {e}", style="bold red")
+        return False
+
 def search_mode(page, live):
     live.stop()
     console.print("Search mode [Enter URL to visit]: ", style="bold cyan", end="")
@@ -272,7 +320,7 @@ with sync_playwright() as p:
             viewport_lines = lines[scroll_offset : scroll_offset + PAGE_SIZE]
             top_panel = Group(title_line, *viewport_lines)
 
-            bottom_panel_text = "← ↑ ↓ →  |  Enter to follow | Q to quit | S (or) / to Search "
+            bottom_panel_text = "↑ ↓ Link Navigate | ← → Back Forward | Enter to follow | Q to quit | S (or) / to Search "
             bottom_panel = Panel(bottom_panel_text, style="bold white")
 
             combined = Group(top_panel, bottom_panel)
@@ -307,9 +355,17 @@ with sync_playwright() as p:
             elif key in ('\x00P', '\xe0P'):  # Down
                 selected_link = min(max_link, selected_link + 1)
             elif key in ('\x00M', '\xe0M'):  # Right
-                console.print("[yellow] Inactionable [/yellow]")
+                 if history_forward:
+                    next_url = history_forward.pop()
+                    if current_url:
+                        history_back.append(current_url)
+                    history_links(next_url, page, is_history=True)
             elif key in ('\x00K', '\xe0K'):  # Left
-                console.print("[yellow] Inactionable [/yellow]")
+                if history_back:
+                    prev_url = history_back.pop()
+                    if current_url:
+                        history_forward.append(current_url)
+                    history_links(prev_url, page, is_history=True)
             elif key.lower() in ('s', '/'):
                 new_dom = search_mode(page, live)
                 if new_dom:
@@ -321,12 +377,14 @@ with sync_playwright() as p:
                     console.clear()
             elif key == '\r':
                 url = link_map.get(selected_link)
-                print(url)
+                # print(url) # debug line
                 link_num = link_clickable.get(selected_line_index)
-                print(link_num)
+                # print(link_num) # debug line
                 if link_num:
                     url = link_map[link_num]
                     if url and url_validate(url):
+                        history_links(url, page)
+                        # print(history_back) # debug line
                         try: 
                             browse_or_fail(page, url)
                             page.goto(url, wait_until='load')
