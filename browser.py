@@ -21,7 +21,7 @@ PAGE_SIZE = console.size.height - 4
 
 history_back = []
 history_forward = []
-current_url = 'http://127.0.0.1:5500/index.html'
+current_url = 'https://web-explorer-three.vercel.app/'
 
 def get_page_title(page) -> str:
     try:
@@ -263,7 +263,7 @@ show_welcome_banner()
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
     page = browser.new_page()
-    result = browse_or_fail(page, "http://127.0.0.1:5500/index.html", timeout=10000)
+    result = browse_or_fail(page, "https://web-explorer-three.vercel.app/", timeout=10000)
 
     dom_tree = page.evaluate("""
         () => {                             
